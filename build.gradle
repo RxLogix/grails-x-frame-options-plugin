@@ -5,16 +5,18 @@ buildscript {
     }
     dependencies {
         classpath "org.grails:grails-gradle-plugin:$grailsVersion"
+        classpath "gradle.plugin.com.gorylenko.gradle-git-properties:gradle-git-properties:2.2.3"
     }
 }
 
-version "1.1.2"
+version "4.0-M1"
 group "org.grails.plugins"
 
 apply plugin:"eclipse"
 apply plugin:"idea"
 apply plugin:"org.grails.grails-plugin"
-apply plugin:"org.grails.grails-plugin-publish"
+apply plugin: "com.gorylenko.gradle-git-properties"
+apply plugin: 'maven-publish'
 
 repositories {
     mavenLocal()
@@ -38,26 +40,68 @@ dependencies {
     compile "org.grails:grails-web-boot"
     console "org.grails:grails-console"
     profile "org.grails.profiles:web-plugin"
-    testCompile "org.grails:grails-plugin-testing"
+    testImplementation "org.grails:grails-gorm-testing-support"
+    testImplementation "org.grails:grails-web-testing-support"
 }
 
 bootRun {
     jvmArgs('-Dspring.output.ansi.enabled=always')
 }
 // enable if you wish to package this plugin as a standalone application
-bootRepackage.enabled = false
+bootJar.enabled = false
 findMainClass.enabled = false
 
-grailsPublish {
-    if (System.getenv('BINTRAY_USER') || project.hasProperty('bintrayUser')) {
-        user = System.getenv('BINTRAY_USER') ?: project.property('bintrayUser')
-        key = System.getenv('BINTRAY_KEY') ?: project.property('bintrayKey')
+gitProperties {
+    keys = ['git.branch', 'git.commit.id', 'git.commit.time', 'git.commit.id.abbrev']
+    failOnNoGitDirectory = true
+    extProperty = 'gitProps' // git properties will be put in a map at project.ext.gitProps
+}
+
+generateGitProperties.outputs.upToDateWhen {
+    false
+} // make sure the generateGitProperties task always executes (even when git.properties is not changed)
+
+jar {
+    dependsOn generateGitProperties
+    manifest {
+        attributes("Built-By": System.getProperty("user.name"))
+        attributes(["Plugin-Version"        : version,
+                    "Plugin-Title"          : project.name,
+                    "Plugin-Build-Timestamp": new Date().format("yyyy-MM-dd'T'HH:mm:ssZ"),
+                    "Git-Commit"            : "${-> project.ext.gitProps['git.commit.id.abbrev']}",
+                    "Git-Branch"            : "${-> project.ext.gitProps['git.branch']}"])
     }
-    githubSlug = 'mrhaki/grails-x-frame-options-plugin'
-    license {
-        name = 'Apache-2.0'
+    from sourceSets.main.output
+    exclude 'git.properties'
+}
+
+publishing {
+    publications {
+        mavenJar(MavenPublication) {
+            pom.withXml {
+                def pomNode = asNode()
+                pomNode.dependencyManagement.replaceNode {}
+
+                // simply remove dependencies without a version
+                // version-less dependencies are handled with dependencyManagement
+                // see https://github.com/spring-gradle-plugins/dependency-management-plugin/issues/8 for more complete solutions
+                pomNode.dependencies.dependency.findAll {
+                    it.version.text().isEmpty()
+                }.each {
+                    it.replaceNode {}
+                }
+            }
+            from components.java
+        }
     }
-    title = "X-Frame-Options Plugin"
-    desc = "Servlet filter that adds a X-FRAME-OPTIONS response header"
-    developers = [mrhaki:"Hubert A. Klein Ikkink", sergio:"Sergio del Amo Caballero", sbglasius: "Søren Berg Glasius"]
+    repositories {
+        maven {
+            name = "NexusRepo"
+            credentials {
+                username project.findProperty("nexusUsername") ?: System.getenv("NEXUS_USERNAME")
+                password project.findProperty("nexusPassword") ?: System.getenv("NEXUS_PASSWORD")
+            }
+            url project.findProperty("nexusUrl") ?: System.getenv("NEXUS_URL")
+        }
+    }
 }
